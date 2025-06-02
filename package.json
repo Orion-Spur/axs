@@ -1,0 +1,12 @@
+{
+  "name": "axs-passport-agent",
+  "version": "1.0.0",
+  "description": "AXS Passport AI Agent",
+  "scripts": {
+    "test": "echo \"No tests specified\""
+  },
+  "dependencies": {
+    "@azure/functions": "^3.5.0"
+  },
+  "devDependencies": {}
+}
