@@ -1,4 +1,4 @@
-module.exports = async function (context, req ) {
+module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
 
     // Get user message from request body
