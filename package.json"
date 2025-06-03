@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@azure/functions": "3.5.0",
-    "@azure/openai": "1.0.0-beta.6"
+    "axios": "0.27.2"
   },
   "devDependencies": {}
 }
