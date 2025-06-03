@@ -1,49 +1,173 @@
 module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
+
+    // Get user message from request body
+    const userMessage = req.body && req.body.message;
     
+    if (!userMessage) {
+        context.res = {
+            status: 400,
+            body: "Please pass a message in the request body"
+        };
+        return;
+    }
+
     try {
-        const endpoint = "https://axs-passport-agent.services.ai.azure.com/api";
-        const apiKey = process.env.AZURE_AI_API_KEY || process.env.OPENAI_API_KEY;
+        // Import axios - make sure to add it to your package.json
+        const axios = require('axios');
         
-        // Simple connectivity test
+        // Get Azure AI Foundry configuration from environment variables
+        const apiKey = process.env.AZURE_AI_API_KEY || process.env.OPENAI_API_KEY;
+        const endpoint = process.env.AZURE_AI_ENDPOINT || "https://axs-passport-agent.services.ai.azure.com/api";
+        const assistantId = process.env.AZURE_AI_ASSISTANT_ID || "asst_0aScZhXyrWQFzG3juluU2sAn";
+        const threadId = process.env.AZURE_AI_THREAD_ID || "thread_jtL5xhJcvYy8tjMhu0ZI6A8";
+        
+        if (!apiKey || !endpoint) {
+            throw new Error("Azure AI Foundry API configuration is missing");
+        }
+        
+        context.log(`Using endpoint: ${endpoint}`);
+        context.log(`Using assistant ID: ${assistantId}`);
+        context.log(`Using thread ID: ${threadId}`);
+        
         try {
-            const response = await fetch(`${endpoint}/health`, {
-                method: 'GET',
+            // First test basic connectivity to a public endpoint
+            context.log('Testing basic internet connectivity...');
+            const testResponse = await axios.get('https://httpbin.org/get');
+            context.log(`Basic connectivity test successful: ${testResponse.status}`);
+            
+            // Add a message to the thread
+            const messagesUrl = `${endpoint}/agents/${assistantId}/threads/${threadId}/messages`;
+            context.log(`Adding message to thread at: ${messagesUrl}`);
+            
+            const messageResponse = await axios.post(messagesUrl, 
+                {
+                    role: "user",
+                    content: userMessage
+                },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'api-key': apiKey
+                    }
+                }
+            );
+            
+            context.log(`Message added to thread successfully: ${messageResponse.status}`);
+            
+            // Run the assistant on the thread
+            const runUrl = `${endpoint}/agents/${assistantId}/threads/${threadId}/runs`;
+            context.log(`Running assistant on thread at: ${runUrl}`);
+            
+            const runResponse = await axios.post(runUrl,
+                {
+                    agent_id: assistantId
+                },
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'api-key': apiKey
+                    }
+                }
+            );
+            
+            const runData = runResponse.data;
+            const runId = runData.id;
+            context.log(`Run created with ID: ${runId}`);
+            
+            // Poll for run completion
+            let runStatus = "queued";
+            let attempts = 0;
+            const maxAttempts = 30; // Maximum number of polling attempts
+            const pollInterval = 1000; // Polling interval in milliseconds
+            
+            const getRunStatusUrl = `${endpoint}/agents/${assistantId}/threads/${threadId}/runs/${runId}`;
+            
+            while (runStatus !== "completed" && runStatus !== "failed" && attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                
+                const runStatusResponse = await axios.get(getRunStatusUrl, {
+                    headers: {
+                        'api-key': apiKey
+                    }
+                });
+                
+                const runStatusData = runStatusResponse.data;
+                runStatus = runStatusData.status;
+                context.log(`Run status: ${runStatus}, attempt: ${attempts + 1}`);
+                attempts++;
+            }
+            
+            if (runStatus !== "completed") {
+                throw new Error(`Run did not complete successfully. Final status: ${runStatus}`);
+            }
+            
+            // Get messages from the thread
+            const getMessagesUrl = `${endpoint}/agents/${assistantId}/threads/${threadId}/messages`;
+            context.log(`Getting messages from thread at: ${getMessagesUrl}`);
+            
+            const getMessagesResponse = await axios.get(getMessagesUrl, {
                 headers: {
                     'api-key': apiKey
                 }
-            } );
+            });
             
-            const status = response.status;
-            const text = await response.text();
+            const messagesData = getMessagesResponse.data;
+            
+            // Find the assistant's response (should be the most recent assistant message)
+            const assistantMessages = messagesData.data.filter(msg => msg.role === "assistant");
+            
+            if (assistantMessages.length === 0) {
+                throw new Error("No assistant messages found in the thread");
+            }
+            
+            // Get the most recent assistant message
+            const latestAssistantMessage = assistantMessages[0];
+            
+            // Extract the text content from the message
+            let agentResponse = "";
+            if (latestAssistantMessage.content && latestAssistantMessage.content.length > 0) {
+                for (const contentItem of latestAssistantMessage.content) {
+                    if (contentItem.type === "text") {
+                        agentResponse += contentItem.text.value;
+                    }
+                }
+            }
+            
+            // Check if the response mentions creating an adjustment
+            const createAdjustment = agentResponse.toLowerCase().includes("create adjustment");
             
             context.res = {
                 status: 200,
                 body: {
-                    message: "Connectivity test completed",
-                    endpoint: endpoint,
-                    statusCode: status,
-                    responseText: text
+                    response: agentResponse,
+                    createAdjustment: createAdjustment
                 }
             };
-        } catch (fetchError) {
+        } catch (apiError) {
+            // Log the API error but still return a successful response with placeholder
+            context.log.error(`Azure AI Foundry API error: ${apiError.message}`);
             context.res = {
                 status: 200,
                 body: {
-                    error: "Fetch error",
-                    details: fetchError.message,
-                    stack: fetchError.stack,
-                    endpoint: endpoint
+                    response: `I received your message: "${userMessage}". This is a placeholder response while we troubleshoot the Azure AI Foundry integration.`,
+                    createAdjustment: false,
+                    error: apiError.message,
+                    config: {
+                        endpoint: endpoint,
+                        assistantId: assistantId,
+                        threadId: threadId
+                    }
                 }
             };
         }
     } catch (error) {
+        context.log.error(`Error: ${error.message}`);
         context.res = {
             status: 500,
             body: {
-                error: "Function error",
-                details: error.message,
-                stack: error.stack
+                error: "An error occurred while processing your request",
+                details: error.message
             }
         };
     }
