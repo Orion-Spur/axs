@@ -15,7 +15,7 @@ module.exports = async function (context, req) {
     try {
         // Get Azure AI Foundry configuration from environment variables
         const apiKey = process.env.AZURE_AI_API_KEY || process.env.OPENAI_API_KEY;
-        const endpoint = process.env.AZURE_AI_ENDPOINT || "https://axs-passport-agent-resource.services.ai.azure.com/api/projects/axs-passport-agent";
+        const endpoint = process.env.AZURE_AI_ENDPOINT || "https://axs-passport-agent.services.ai.azure.com/api";
         const assistantId = process.env.AZURE_AI_ASSISTANT_ID || "asst_0aScZhXyrWQFzG3juluU2sAn";
         const threadId = process.env.AZURE_AI_THREAD_ID || "thread_jtL5xhJcvYy8tjMhu0ZI6A8";
         
