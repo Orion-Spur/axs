@@ -13,15 +13,39 @@ module.exports = async function (context, req) {
     }
 
     try {
-        // Import axios - make sure to add it to your package.json
-        const axios = require('axios');
+        // Import built-in https module
+        const https = require('https');
         
-        // Test outbound connectivity to httpbin.org
+        // Test outbound connectivity to httpbin.org using built-in https module
         context.log('Testing outbound connectivity to httpbin.org...');
+        
+        // Create a promise-based https request
+        const httpsRequest = (url) => {
+            return new Promise((resolve, reject) => {
+                https.get(url, (res) => {
+                    let data = '';
+                    
+                    res.on('data', (chunk) => {
+                        data += chunk;
+                    });
+                    
+                    res.on('end', () => {
+                        resolve({
+                            status: res.statusCode,
+                            statusText: res.statusMessage,
+                            data: data
+                        });
+                    });
+                }).on('error', (err) => {
+                    reject(err);
+                });
+            });
+        };
+        
         let connectivityTestResult = null;
         
         try {
-            const httpbinResponse = await axios.get('https://httpbin.org/get');
+            const httpbinResponse = await httpsRequest('https://httpbin.org/get');
             connectivityTestResult = {
                 success: true,
                 status: httpbinResponse.status,
