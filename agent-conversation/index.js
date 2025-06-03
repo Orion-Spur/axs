@@ -1,4 +1,4 @@
-const { OpenAIClient, AzureKeyCredential } = require("@azure/openai");
+const axios = require('axios');
 
 module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
@@ -18,7 +18,6 @@ module.exports = async function (context, req) {
         // Get OpenAI configuration from environment variables
         const apiKey = process.env.OPENAI_API_KEY;
         const endpoint = process.env.OPENAI_API_ENDPOINT;
-        // Use a simple deployment name without version info
         const deploymentName = process.env.OPENAI_DEPLOYMENT_NAME || "gpt-4o";
         
         if (!apiKey || !endpoint) {
@@ -29,31 +28,29 @@ module.exports = async function (context, req) {
         context.log(`Using OpenAI endpoint: ${endpoint}`);
         context.log(`Using deployment: ${deploymentName}`);
         
-        // Initialize the OpenAI client
-        const client = new OpenAIClient(endpoint, new AzureKeyCredential(apiKey));
-        
         // System message for the AI agent
         const systemMessage = "You are the AXS Passport AI Agent, designed to help with workplace adjustments. You assist users in creating and managing adjustment records for employees with disabilities or health conditions.";
         
-        // Log the conversation for debugging
-        context.log(`User message: ${userMessage}`);
-        
-        // Call your AI Foundry agent with simplified parameters
-        context.log('Sending request to OpenAI API...');
-        const response = await client.getChatCompletions(
-            deploymentName,
-            [
+        // Prepare the request to Azure OpenAI
+        const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
+        const headers = {
+            'Content-Type': 'application/json',
+            'api-key': apiKey
+        };
+        const data = {
+            messages: [
                 { role: "system", content: systemMessage },
                 { role: "user", content: userMessage }
             ],
-            { 
-                temperature: 0.7
-                // Removed maxTokens parameter which might be causing issues
-            }
-        );
+            temperature: 0.7
+        };
+        
+        // Make the API call using axios instead of the SDK
+        context.log('Sending request to OpenAI API...');
+        const response = await axios.post(url, data, { headers });
         
         // Extract the response
-        const agentResponse = response.choices[0].message.content;
+        const agentResponse = response.data.choices[0].message.content;
         
         // Log the response for debugging
         context.log(`Agent response: ${agentResponse}`);
@@ -73,6 +70,9 @@ module.exports = async function (context, req) {
         };
     } catch (error) {
         context.log.error(`Error processing message: ${error.message}`);
+        if (error.response) {
+            context.log.error(`Error response: ${JSON.stringify(error.response.data)}`);
+        }
         context.res = {
             status: 500,
             body: {
