@@ -16,8 +16,8 @@ module.exports = async function (context, req) {
         // Get OpenAI configuration from environment variables
         const apiKey = process.env.OPENAI_API_KEY;
         const endpoint = process.env.OPENAI_API_ENDPOINT;
-        // Simplify deployment name - remove version info
-        const deploymentName = (process.env.OPENAI_DEPLOYMENT_NAME || "gpt-4o").split(" ")[0];
+        // Use the full deployment name including version
+        const deploymentName = process.env.OPENAI_DEPLOYMENT_NAME || "gpt-4o (version:2024-11-20)";
         
         if (!apiKey || !endpoint) {
             throw new Error("OpenAI API configuration is missing");
@@ -28,8 +28,10 @@ module.exports = async function (context, req) {
         
         // Try to call OpenAI API, but fall back to placeholder if it fails
         try {
+            // Extract the base deployment name without version for the URL path
+            const baseDeploymentName = deploymentName.split(" ")[0];
             // Prepare the request to Azure OpenAI with updated API version
-            const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2023-12-01-preview`;
+            const url = `${endpoint}/openai/deployments/${baseDeploymentName}/chat/completions?api-version=2023-12-01-preview`;
             context.log(`Calling URL: ${url}`);
             
             const requestBody = {
@@ -38,7 +40,7 @@ module.exports = async function (context, req) {
                     { role: "user", content: userMessage }
                 ],
                 temperature: 0.7,
-                model: deploymentName  // Add model name to request body
+                model: deploymentName  // Use full deployment name in the request body
             };
             
             context.log(`Request body: ${JSON.stringify(requestBody)}`);
@@ -48,7 +50,7 @@ module.exports = async function (context, req) {
                 headers: {
                     'Content-Type': 'application/json',
                     'api-key': apiKey,
-                    'x-ms-model-mesh-model-name': deploymentName  // Add model name as header as well
+                    'x-ms-model-mesh-model-name': deploymentName  // Use full deployment name in header
                 },
                 body: JSON.stringify(requestBody)
             });
