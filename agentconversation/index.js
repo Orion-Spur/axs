@@ -1,101 +1,187 @@
+// Azure Function for Voice Conversation WebSocket Endpoint
+// File: voiceconversation/index.js
+
+const { SpeechConfig, AudioConfig, SpeechRecognizer, ResultReason } = require('microsoft-cognitiveservices-speech-sdk');
+const { WebSocketServer } = require('ws');
+
 module.exports = async function (context, req) {
-    context.log('Agent conversation function processing request...');
-
-    try {
-        // Import built-in https module
-        const https = require('https');
+    // Check if this is a WebSocket request
+    if (req.headers['sec-websocket-key']) {
+        context.log('WebSocket connection request received');
         
-        // Get Azure OpenAI configuration from environment variables
-        const apiKey = process.env.AZURE_AI_API_KEY || process.env.OPENAI_API_KEY;
-        const endpoint = process.env.AZURE_OPENAI_ENDPOINT || "https://axs-passport-agent-resource.cognitiveservices.azure.com/";
-        const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT || "gpt-4o";
-        const apiVersion = process.env.AZURE_OPENAI_API_VERSION || "2023-12-01-preview";
+        // Create WebSocket server
+        const wss = new WebSocketServer({ noServer: true });
         
-        if (!apiKey || !endpoint) {
-            throw new Error("Azure OpenAI API configuration is missing");
-        }
-        
-        context.log(`Using endpoint: ${endpoint}`);
-        context.log(`Using deployment: ${deploymentName}`);
-        
-        // Get messages from request body
-        const messages = req.body && req.body.messages;
-        
-        if (!messages || !Array.isArray(messages) || messages.length === 0) {
-            context.res = {
-                status: 400,
-                body: "Please pass a valid messages array in the request body"
+        // Handle WebSocket connection
+        wss.on('connection', (ws) => {
+            context.log('WebSocket connection established');
+            
+            // Client configuration
+            let clientConfig = {
+                language: 'en-US',
+                voiceName: 'en-US-JennyNeural',
+                interruptible: true
             };
-            return;
-        }
-
-        // Log the number of messages received for debugging
-        context.log(`Received ${messages.length} messages in conversation history`);
-        
-        // Create a promise-based https request function
-        const httpsRequest = (options, postData) => {
-            return new Promise((resolve, reject) => {
-                const req = https.request(options, (res) => {
-                    let data = '';
-                    
-                    res.on('data', (chunk) => {
-                        data += chunk;
-                    });
-                    
-                    res.on('end', () => {
-                        if (res.statusCode >= 200 && res.statusCode < 300) {
-                            try {
-                                const parsedData = data ? JSON.parse(data) : {};
-                                resolve({
-                                    status: res.statusCode,
-                                    statusText: res.statusMessage,
-                                    data: parsedData
-                                });
-                            } catch (e) {
-                                reject(new Error(`Failed to parse response: ${e.message}, data: ${data}`));
-                            }
-                        } else {
-                            reject(new Error(`Request failed with status ${res.statusCode}: ${data}`));
+            
+            // Conversation state
+            let conversationState = 'idle';
+            let currentRecognizer = null;
+            let messages = [];
+            
+            // Handle messages from client
+            ws.on('message', async (message) => {
+                try {
+                    // Check if message is binary (audio data) or text (JSON)
+                    if (message instanceof Buffer) {
+                        // Process audio data if in listening state
+                        if (conversationState === 'listening') {
+                            processAudioData(message);
                         }
-                    });
-                }).on('error', (err) => {
-                    reject(err);
-                });
-                
-                if (postData) {
-                    req.write(postData);
+                    } else {
+                        // Process JSON message
+                        const data = JSON.parse(message.toString());
+                        
+                        switch (data.type) {
+                            case 'config':
+                                // Update client configuration
+                                clientConfig = {
+                                    ...clientConfig,
+                                    ...data
+                                };
+                                context.log('Updated client configuration:', clientConfig);
+                                break;
+                                
+                            case 'text':
+                                // Process text message directly
+                                conversationState = 'processing';
+                                sendToClient(ws, { type: 'state', state: conversationState });
+                                
+                                // Add to message history
+                                messages.push({ role: 'user', content: data.text });
+                                
+                                // Process with OpenAI
+                                const response = await processWithOpenAI(messages);
+                                
+                                // Add to message history
+                                messages.push({ role: 'assistant', content: response });
+                                
+                                // Convert to speech
+                                const audioUrl = await textToSpeech(response, clientConfig.voiceName);
+                                
+                                // Send response to client
+                                conversationState = 'speaking';
+                                sendToClient(ws, { 
+                                    type: 'response', 
+                                    text: response,
+                                    audioUrl: audioUrl,
+                                    state: conversationState
+                                });
+                                break;
+                                
+                            case 'interrupt':
+                                // Handle interruption
+                                if (conversationState === 'speaking') {
+                                    conversationState = 'listening';
+                                    sendToClient(ws, { type: 'state', state: conversationState });
+                                }
+                                break;
+                                
+                            default:
+                                context.log('Unknown message type:', data.type);
+                        }
+                    }
+                } catch (error) {
+                    context.log.error('Error processing message:', error);
+                    sendToClient(ws, { type: 'error', message: 'Error processing message' });
                 }
-                
-                req.end();
             });
-        };
-        
-        try {
-            // Parse the endpoint URL
-            const endpointUrl = new URL(endpoint);
             
-            // Construct the Azure OpenAI API URL for chat completions
-            const apiPath = `/openai/deployments/${deploymentName}/chat/completions`;
-            const apiUrl = `${apiPath}?api-version=${apiVersion}`;
-            
-            context.log(`Making request to: ${apiUrl}`);
-            
-            const requestOptions = {
-                hostname: endpointUrl.hostname,
-                path: apiUrl,
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'api-key': apiKey
+            // Handle WebSocket close
+            ws.on('close', () => {
+                context.log('WebSocket connection closed');
+                if (currentRecognizer) {
+                    currentRecognizer.close();
                 }
-            };
+            });
             
-            // Check if we need to add the system message
-            let conversationMessages = [...messages];
+            // Process audio data with Azure Speech API
+            async function processAudioData(audioData) {
+                if (!currentRecognizer) {
+                    // Initialize speech recognizer
+                    const speechConfig = SpeechConfig.fromSubscription(
+                        process.env.SPEECH_KEY,
+                        process.env.SPEECH_REGION
+                    );
+                    speechConfig.speechRecognitionLanguage = clientConfig.language;
+                    
+                    // Create recognizer with push audio stream
+                    const audioConfig = AudioConfig.fromStreamInput(createPushStream());
+                    currentRecognizer = new SpeechRecognizer(speechConfig, audioConfig);
+                    
+                    // Handle recognition results
+                    currentRecognizer.recognized = (s, e) => {
+                        if (e.result.reason === ResultReason.RecognizedSpeech) {
+                            const transcript = e.result.text;
+                            context.log('RECOGNIZED:', transcript);
+                            
+                            // Send transcript to client
+                            sendToClient(ws, { 
+                                type: 'transcript', 
+                                text: transcript,
+                                isFinal: true
+                            });
+                            
+                            // Process recognized speech
+                            processRecognizedSpeech(transcript);
+                        }
+                    };
+                    
+                    // Start continuous recognition
+                    await currentRecognizer.startContinuousRecognitionAsync();
+                }
+                
+                // Push audio data to recognizer
+                pushAudioData(audioData);
+            }
             
-            // If no system message is present, add Rosa's system prompt
-            if (!messages.some(msg => msg.role === 'system')) {
-                const systemPrompt = `Purpose
+            // Process recognized speech
+            async function processRecognizedSpeech(transcript) {
+                if (transcript.trim()) {
+                    // Update state
+                    conversationState = 'processing';
+                    sendToClient(ws, { type: 'state', state: conversationState });
+                    
+                    // Add to message history
+                    messages.push({ role: 'user', content: transcript });
+                    
+                    // Process with OpenAI
+                    const response = await processWithOpenAI(messages);
+                    
+                    // Add to message history
+                    messages.push({ role: 'assistant', content: response });
+                    
+                    // Convert to speech
+                    const audioUrl = await textToSpeech(response, clientConfig.voiceName);
+                    
+                    // Send response to client
+                    conversationState = 'speaking';
+                    sendToClient(ws, { 
+                        type: 'response', 
+                        text: response,
+                        audioUrl: audioUrl,
+                        state: conversationState
+                    });
+                }
+            }
+            
+            // Initialize conversation
+            conversationState = 'listening';
+            sendToClient(ws, { type: 'state', state: conversationState });
+            
+            // Add system message to history
+            messages.push({
+                role: 'system',
+                content: `Purpose
 You are Rosa, an AI assistant embedded in the AXS Passport platform. Your goal is to help employees identify and articulate workplace challenges, suggest reasonable adjustments, and submit an official Adjustment Request to their employer's HR system.
  
 Context Awareness
@@ -128,11 +214,11 @@ o Ask:
 "What difference would it make to your work or wellbeing?"
 7. Confirm Details
 o Recap the user's:
-    Name, Role, Company, Email (already known from their profile)
-    Category, Subcategory
-    Description of need
-    Suggested adjustment
-    Expected impact
+◦ Name, Role, Company, Email (already known from their profile)
+◦ Category, Subcategory
+◦ Description of need
+◦ Suggested adjustment
+◦ Expected impact
 8. Submit
 o Confirm with the user:
 "Ready to submit this request? You'll receive updates from our Ally once it's reviewed."
@@ -143,86 +229,112 @@ At the end of the conversation, you must extract and present four elements in a 
 o If not yet implemented in system, leave as "Pending"
 3. Contextual Description
 o A single paragraph that explains:
-    The problem experienced
-    When/where it occurs
-    Any personal context that's relevant
+◦ The problem experienced
+◦ When/where it occurs
+◦ Any personal context that's relevant
 (Write it as a faithful retelling in Rosa's voice)
 4. The Employee's Need
 o A clear and concise description of what the employee is asking for — their proposed adjustment or request
 Ensure this summary is coherent, respectful, and ready to be submitted to the employer's system.
  
-Tone & Style
+🔒 Tone & Style
 • Warm, professional, and inclusive.
 • Be clear and jargon-free.
 • If the user seems uncertain, offer simple examples and always reassure them.
-• Never make medical claims or diagnoses.`;
-                
-                conversationMessages.unshift({
-                    role: 'system',
-                    content: systemPrompt
-                });
-                
-                context.log('Added system prompt to conversation');
-            }
-            
-            // Log the total number of tokens being sent (approximate)
-            const estimateTokens = (text) => Math.ceil(text.length / 4);
-            const totalTokens = conversationMessages.reduce((sum, msg) => {
-                return sum + estimateTokens(msg.content);
-            }, 0);
-            
-            context.log(`Estimated total tokens: ${totalTokens}`);
-            
-            const requestData = JSON.stringify({
-                messages: conversationMessages,
-                temperature: 1.0,
-                top_p: 1.0,
-                max_tokens: 800
+• Never make medical claims or diagnoses.
+• Keep responses concise`
             });
-            
-            context.log('Sending request to Azure OpenAI API...');
-            const response = await httpsRequest(requestOptions, requestData);
-            context.log('Received response from Azure OpenAI API');
-            
-            // Extract the assistant's response
-            const assistantResponse = response.data.choices[0].message.content;
-            
-            // Check if the response mentions creating an adjustment
-            const createAdjustment = assistantResponse.toLowerCase().includes("create adjustment") || 
-                                    assistantResponse.toLowerCase().includes("submit this request") ||
-                                    assistantResponse.toLowerCase().includes("adjustment request");
-            
-            context.res = {
-                status: 200,
-                body: {
-                    response: assistantResponse,
-                    createAdjustment: createAdjustment
-                }
-            };
-        } catch (apiError) {
-            // Log the API error but still return a successful response with placeholder
-            context.log.error(`Azure OpenAI API error: ${apiError.message}`);
-            context.res = {
-                status: 200,
-                body: {
-                    response: `I received your message but encountered an issue connecting to my knowledge base. This is a temporary problem, and our team is working to resolve it. Could you please try again in a few moments?`,
-                    createAdjustment: false,
-                    error: apiError.message,
-                    config: {
-                        endpoint: endpoint,
-                        deploymentName: deploymentName
-                    }
-                }
-            };
-        }
-    } catch (error) {
-        context.log.error(`Error: ${error.message}`);
+        });
+        
+        // Upgrade HTTP request to WebSocket
+        context.bindings.res = {
+            status: 101,
+            headers: {
+                'Upgrade': 'websocket',
+                'Connection': 'Upgrade',
+                'Sec-WebSocket-Accept': computeAccept(req.headers['sec-websocket-key'])
+            },
+            body: ''
+        };
+    } else {
+        // Handle regular HTTP request
         context.res = {
-            status: 500,
-            body: {
-                error: "An error occurred while processing your request",
-                details: error.message
-            }
+            status: 200,
+            body: "This endpoint requires a WebSocket connection."
         };
     }
 };
+
+// Helper functions
+
+// Send message to client
+function sendToClient(ws, data) {
+    if (ws.readyState === 1) { // OPEN
+        ws.send(JSON.stringify(data));
+    }
+}
+
+// Process messages with OpenAI
+async function processWithOpenAI(messages) {
+    // Azure OpenAI configuration
+    const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+    const apiKey = process.env.AZURE_OPENAI_KEY;
+    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT;
+    const apiVersion = '2023-12-01-preview';
+    
+    // Prepare request
+    const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=${apiVersion}`;
+    
+    const requestData = {
+        messages: messages,
+        temperature: 1.0,
+        top_p: 1.0,
+        max_tokens: 800
+    };
+    
+    // Send request to Azure OpenAI
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'api-key': apiKey
+        },
+        body: JSON.stringify(requestData)
+    });
+    
+    if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+
+// Convert text to speech using Azure Speech Service
+async function textToSpeech(text, voiceName) {
+    // In a real implementation, this would use Azure Speech Service to generate audio
+    // For now, we'll return a placeholder URL
+    return `https://axs-passport-agent.azurewebsites.net/api/audio/${encodeURIComponent(voiceName)}`;
+}
+
+// Create push audio stream for speech recognition
+function createPushStream() {
+    // Implementation would use Azure Speech SDK's PushAudioInputStream
+    // This is a placeholder for the actual implementation
+    return null;
+}
+
+// Push audio data to the stream
+function pushAudioData(audioData) {
+    // Implementation would push data to the PushAudioInputStream
+    // This is a placeholder for the actual implementation
+}
+
+// Compute WebSocket accept header
+function computeAccept(key) {
+    const crypto = require('crypto');
+    const magic = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+    const sha1 = crypto.createHash('sha1');
+    sha1.update(key + magic);
+    return sha1.digest('base64');
+}
