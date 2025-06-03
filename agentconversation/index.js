@@ -37,7 +37,8 @@ module.exports = async function (context, req) {
                     { role: "system", content: "You are the AXS Passport AI Agent, designed to help with workplace adjustments." },
                     { role: "user", content: userMessage }
                 ],
-                temperature: 0.7
+                temperature: 0.7,
+                model: deploymentName  // Add model name to request body
             };
             
             context.log(`Request body: ${JSON.stringify(requestBody)}`);
@@ -46,7 +47,8 @@ module.exports = async function (context, req) {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'api-key': apiKey
+                    'api-key': apiKey,
+                    'x-ms-model-mesh-model-name': deploymentName  // Add model name as header as well
                 },
                 body: JSON.stringify(requestBody)
             });
