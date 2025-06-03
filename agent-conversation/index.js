@@ -1,5 +1,3 @@
-const axios = require('axios');
-
 module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
 
@@ -24,32 +22,52 @@ module.exports = async function (context, req) {
             throw new Error("OpenAI API configuration is missing");
         }
         
-        // Prepare the request to Azure OpenAI
-        const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
-        const headers = {
-            'Content-Type': 'application/json',
-            'api-key': apiKey
-        };
-        const data = {
-            messages: [
-                { role: "system", content: "You are the AXS Passport AI Agent, designed to help with workplace adjustments." },
-                { role: "user", content: userMessage }
-            ],
-            temperature: 0.7
-        };
-        
-        // Make the API call using axios
-        const response = await axios.post(url, data, { headers });
-        const agentResponse = response.data.choices[0].message.content;
-        const createAdjustment = agentResponse.toLowerCase().includes("create adjustment");
-        
-        context.res = {
-            status: 200,
-            body: {
-                response: agentResponse,
-                createAdjustment: createAdjustment
+        // Try to call OpenAI API, but fall back to placeholder if it fails
+        try {
+            // Prepare the request to Azure OpenAI
+            const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'api-key': apiKey
+                },
+                body: JSON.stringify({
+                    messages: [
+                        { role: "system", content: "You are the AXS Passport AI Agent, designed to help with workplace adjustments." },
+                        { role: "user", content: userMessage }
+                    ],
+                    temperature: 0.7
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`OpenAI API returned ${response.status}`);
             }
-        };
+            
+            const data = await response.json();
+            const agentResponse = data.choices[0].message.content;
+            const createAdjustment = agentResponse.toLowerCase().includes("create adjustment");
+            
+            context.res = {
+                status: 200,
+                body: {
+                    response: agentResponse,
+                    createAdjustment: createAdjustment
+                }
+            };
+        } catch (apiError) {
+            // Log the API error but still return a successful response with placeholder
+            context.log.error(`OpenAI API error: ${apiError.message}`);
+            context.res = {
+                status: 200,
+                body: {
+                    response: `I received your message: "${userMessage}". This is a placeholder response while we troubleshoot the OpenAI integration.`,
+                    createAdjustment: false,
+                    error: apiError.message
+                }
+            };
+        }
     } catch (error) {
         context.log.error(`Error: ${error.message}`);
         context.res = {
