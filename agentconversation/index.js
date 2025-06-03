@@ -1,22 +1,9 @@
 module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
 
-    // Get user message from request body
-    const userMessage = req.body && req.body.message;
-    
-    if (!userMessage) {
-        context.res = {
-            status: 400,
-            body: "Please pass a message in the request body"
-        };
-        return;
-    }
-
     try {
         // Import built-in https module
         const https = require('https');
-        const fs = require('fs');
-        const path = require('path');
         
         // Get Azure OpenAI configuration from environment variables
         const apiKey = process.env.AZURE_AI_API_KEY || process.env.OPENAI_API_KEY;
@@ -31,8 +18,84 @@ module.exports = async function (context, req) {
         context.log(`Using endpoint: ${endpoint}`);
         context.log(`Using deployment: ${deploymentName}`);
         
-        // Rosa's system prompt from ChatSetup.json
-        const systemPrompt = `Purpose
+        // Get messages from request body
+        const messages = req.body && req.body.messages;
+        
+        if (!messages || !Array.isArray(messages) || messages.length === 0) {
+            context.res = {
+                status: 400,
+                body: "Please pass a valid messages array in the request body"
+            };
+            return;
+        }
+
+        // Log the number of messages received for debugging
+        context.log(`Received ${messages.length} messages in conversation history`);
+        
+        // Create a promise-based https request function
+        const httpsRequest = (options, postData) => {
+            return new Promise((resolve, reject) => {
+                const req = https.request(options, (res) => {
+                    let data = '';
+                    
+                    res.on('data', (chunk) => {
+                        data += chunk;
+                    });
+                    
+                    res.on('end', () => {
+                        if (res.statusCode >= 200 && res.statusCode < 300) {
+                            try {
+                                const parsedData = data ? JSON.parse(data) : {};
+                                resolve({
+                                    status: res.statusCode,
+                                    statusText: res.statusMessage,
+                                    data: parsedData
+                                });
+                            } catch (e) {
+                                reject(new Error(`Failed to parse response: ${e.message}, data: ${data}`));
+                            }
+                        } else {
+                            reject(new Error(`Request failed with status ${res.statusCode}: ${data}`));
+                        }
+                    });
+                }).on('error', (err) => {
+                    reject(err);
+                });
+                
+                if (postData) {
+                    req.write(postData);
+                }
+                
+                req.end();
+            });
+        };
+        
+        try {
+            // Parse the endpoint URL
+            const endpointUrl = new URL(endpoint);
+            
+            // Construct the Azure OpenAI API URL for chat completions
+            const apiPath = `/openai/deployments/${deploymentName}/chat/completions`;
+            const apiUrl = `${apiPath}?api-version=${apiVersion}`;
+            
+            context.log(`Making request to: ${apiUrl}`);
+            
+            const requestOptions = {
+                hostname: endpointUrl.hostname,
+                path: apiUrl,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'api-key': apiKey
+                }
+            };
+            
+            // Check if we need to add the system message
+            let conversationMessages = [...messages];
+            
+            // If no system message is present, add Rosa's system prompt
+            if (!messages.some(msg => msg.role === 'system')) {
+                const systemPrompt = `Purpose
 You are Rosa, an AI assistant embedded in the AXS Passport platform. Your goal is to help employees identify and articulate workplace challenges, suggest reasonable adjustments, and submit an official Adjustment Request to their employer's HR system.
  
 Context Awareness
@@ -93,7 +156,7 @@ Ensure this summary is coherent, respectful, and ready to be submitted to the em
 • Be clear and jargon-free.
 • If the user seems uncertain, offer simple examples and always reassure them.
 • Never make medical claims or diagnoses.
-• Keep responses concise
+• Keep responses concise and be mindful of being repetitive
 
 Categories for workplace adjustments include:
 1. Assistive Technology
@@ -110,70 +173,25 @@ Categories for workplace adjustments include:
 12. Service Animals
 13. Transportation
 14. Other Accommodations`;
-        
-        // Create a promise-based https request function
-        const httpsRequest = (options, postData) => {
-            return new Promise((resolve, reject) => {
-                const req = https.request(options, (res) => {
-                    let data = '';
-                    
-                    res.on('data', (chunk) => {
-                        data += chunk;
-                    });
-                    
-                    res.on('end', () => {
-                        if (res.statusCode >= 200 && res.statusCode < 300) {
-                            try {
-                                const parsedData = data ? JSON.parse(data) : {};
-                                resolve({
-                                    status: res.statusCode,
-                                    statusText: res.statusMessage,
-                                    data: parsedData
-                                });
-                            } catch (e) {
-                                reject(new Error(`Failed to parse response: ${e.message}, data: ${data}`));
-                            }
-                        } else {
-                            reject(new Error(`Request failed with status ${res.statusCode}: ${data}`));
-                        }
-                    });
-                }).on('error', (err) => {
-                    reject(err);
+                
+                conversationMessages.unshift({
+                    role: 'system',
+                    content: systemPrompt
                 });
                 
-                if (postData) {
-                    req.write(postData);
-                }
-                
-                req.end();
-            });
-        };
-        
-        try {
-            // Parse the endpoint URL
-            const endpointUrl = new URL(endpoint);
+                context.log('Added system prompt to conversation');
+            }
             
-            // Construct the Azure OpenAI API URL for chat completions
-            const apiPath = `/openai/deployments/${deploymentName}/chat/completions`;
-            const apiUrl = `${apiPath}?api-version=${apiVersion}`;
+            // Log the total number of tokens being sent (approximate)
+            const estimateTokens = (text) => Math.ceil(text.length / 4);
+            const totalTokens = conversationMessages.reduce((sum, msg) => {
+                return sum + estimateTokens(msg.content);
+            }, 0);
             
-            context.log(`Making request to: ${apiUrl}`);
-            
-            const requestOptions = {
-                hostname: endpointUrl.hostname,
-                path: apiUrl,
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'api-key': apiKey
-                }
-            };
+            context.log(`Estimated total tokens: ${totalTokens}`);
             
             const requestData = JSON.stringify({
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userMessage }
-                ],
+                messages: conversationMessages,
                 temperature: 1.0,
                 max_tokens: 800
             });
@@ -203,7 +221,7 @@ Categories for workplace adjustments include:
             context.res = {
                 status: 200,
                 body: {
-                    response: `I received your message: "${userMessage}". This is a placeholder response while we troubleshoot the Azure OpenAI integration.`,
+                    response: `I received your message but encountered an issue connecting to my knowledge base. This is a temporary problem, and our team is working to resolve it. Could you please try again in a few moments?`,
                     createAdjustment: false,
                     error: apiError.message,
                     config: {
