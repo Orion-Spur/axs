@@ -17,7 +17,7 @@ module.exports = async function (context, req) {
         const apiKey = process.env.OPENAI_API_KEY;
         const endpoint = process.env.OPENAI_API_ENDPOINT;
         // Use the exact deployment name as configured in Azure OpenAI service
-        const deploymentName = process.env.OPENAI_DEPLOYMENT_NAME || "YOUR_EXACT_DEPLOYMENT_NAME";
+        const deploymentName = process.env.OPENAI_DEPLOYMENT_NAME || "gpt-4o";
         
         if (!apiKey || !endpoint) {
             throw new Error("OpenAI API configuration is missing");
@@ -37,8 +37,8 @@ module.exports = async function (context, req) {
                     { role: "system", content: "You are the AXS Passport AI Agent, designed to help with workplace adjustments." },
                     { role: "user", content: userMessage }
                 ],
-                temperature: 0.7
-                // Removed model parameter as it's not needed when using the deployment name in the URL
+                temperature: 0.7,
+                model: "gpt-4o"  // Add model name explicitly
             };
             
             context.log(`Request body: ${JSON.stringify(requestBody)}`);
@@ -47,8 +47,8 @@ module.exports = async function (context, req) {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'api-key': apiKey
-                    // Removed x-ms-model-mesh-model-name header as it's not needed
+                    'api-key': apiKey,
+                    'x-ms-model-mesh-model-name': 'gpt-4o'  // Add model name as header
                 },
                 body: JSON.stringify(requestBody)
             });
