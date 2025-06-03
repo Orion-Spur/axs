@@ -24,13 +24,6 @@ module.exports = async function (context, req) {
             throw new Error("OpenAI API configuration is missing");
         }
         
-        // Log configuration (without sensitive data)
-        context.log(`Using OpenAI endpoint: ${endpoint}`);
-        context.log(`Using deployment: ${deploymentName}`);
-        
-        // System message for the AI agent
-        const systemMessage = "You are the AXS Passport AI Agent, designed to help with workplace adjustments. You assist users in creating and managing adjustment records for employees with disabilities or health conditions.";
-        
         // Prepare the request to Azure OpenAI
         const url = `${endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
         const headers = {
@@ -39,27 +32,16 @@ module.exports = async function (context, req) {
         };
         const data = {
             messages: [
-                { role: "system", content: systemMessage },
+                { role: "system", content: "You are the AXS Passport AI Agent, designed to help with workplace adjustments." },
                 { role: "user", content: userMessage }
             ],
             temperature: 0.7
         };
         
-        // Make the API call using axios instead of the SDK
-        context.log('Sending request to OpenAI API...');
+        // Make the API call using axios
         const response = await axios.post(url, data, { headers });
-        
-        // Extract the response
         const agentResponse = response.data.choices[0].message.content;
-        
-        // Log the response for debugging
-        context.log(`Agent response: ${agentResponse}`);
-        
-        // Check if the response indicates an adjustment record should be created
-        const createAdjustment = agentResponse.toLowerCase().includes("create adjustment") || 
-                                agentResponse.toLowerCase().includes("new adjustment");
-        
-        context.log(`Create adjustment flag: ${createAdjustment}`);
+        const createAdjustment = agentResponse.toLowerCase().includes("create adjustment");
         
         context.res = {
             status: 200,
@@ -69,10 +51,7 @@ module.exports = async function (context, req) {
             }
         };
     } catch (error) {
-        context.log.error(`Error processing message: ${error.message}`);
-        if (error.response) {
-            context.log.error(`Error response: ${JSON.stringify(error.response.data)}`);
-        }
+        context.log.error(`Error: ${error.message}`);
         context.res = {
             status: 500,
             body: {
