@@ -151,28 +151,11 @@ o A single paragraph that explains:
 o A clear and concise description of what the employee is asking for — their proposed adjustment or request
 Ensure this summary is coherent, respectful, and ready to be submitted to the employer's system.
  
-💬 Tone & Style
+Tone & Style
 • Warm, professional, and inclusive.
 • Be clear and jargon-free.
 • If the user seems uncertain, offer simple examples and always reassure them.
-• Never make medical claims or diagnoses.
-• Keep responses concise and be mindful of being repetitive
-
-Categories for workplace adjustments include:
-1. Assistive Technology
-2. Visual Accommodations
-3. Auditory Accommodations
-4. Physical Access
-5. Cognitive Support
-6. Communication Aids
-7. Ergonomic Adjustments
-8. Schedule Modifications
-9. Remote Work
-10. Environmental Adjustments
-11. Training & Support
-12. Service Animals
-13. Transportation
-14. Other Accommodations`;
+• Never make medical claims or diagnoses.`;
                 
                 conversationMessages.unshift({
                     role: 'system',
@@ -193,6 +176,7 @@ Categories for workplace adjustments include:
             const requestData = JSON.stringify({
                 messages: conversationMessages,
                 temperature: 1.0,
+                top_p: 1.0,
                 max_tokens: 800
             });
             
