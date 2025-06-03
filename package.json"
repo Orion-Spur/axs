@@ -1,5 +1,7 @@
 {
-  "name": "axs-passport-agent",
+  "name": "agentconversation",
   "version": "1.0.0",
-  "description": "AXS Passport AI Agent"
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
 }
