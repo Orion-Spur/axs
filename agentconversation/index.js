@@ -13,12 +13,36 @@ module.exports = async function (context, req) {
     }
 
     try {
-        // Simple response without any external API calls
+        // Import axios - make sure to add it to your package.json
+        const axios = require('axios');
+        
+        // Test outbound connectivity to httpbin.org
+        context.log('Testing outbound connectivity to httpbin.org...');
+        let connectivityTestResult = null;
+        
+        try {
+            const httpbinResponse = await axios.get('https://httpbin.org/get');
+            connectivityTestResult = {
+                success: true,
+                status: httpbinResponse.status,
+                statusText: httpbinResponse.statusText
+            };
+            context.log(`Connectivity test successful: ${httpbinResponse.status}`);
+        } catch (connectivityError) {
+            connectivityTestResult = {
+                success: false,
+                error: connectivityError.message
+            };
+            context.log.error(`Connectivity test failed: ${connectivityError.message}`);
+        }
+        
+        // Return response with connectivity test results
         context.res = {
             status: 200,
             body: {
                 response: `You said: "${userMessage}". This is a test response from the AXS Passport AI Agent.`,
-                createAdjustment: false
+                createAdjustment: false,
+                connectivityTest: connectivityTestResult
             }
         };
     } catch (error) {
