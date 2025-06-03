@@ -1,4 +1,4 @@
-const { AzureKeyCredential, OpenAIClient } = require("@azure/openai");
+const { OpenAIClient, AzureKeyCredential } = require("@azure/openai");
 
 module.exports = async function (context, req) {
     context.log('Agent conversation function processing request...');
@@ -18,6 +18,7 @@ module.exports = async function (context, req) {
         // Get OpenAI configuration from environment variables
         const apiKey = process.env.OPENAI_API_KEY;
         const endpoint = process.env.OPENAI_API_ENDPOINT;
+        // Use a simple deployment name without version info
         const deploymentName = process.env.OPENAI_DEPLOYMENT_NAME || "gpt-4o";
         
         if (!apiKey || !endpoint) {
@@ -31,13 +32,13 @@ module.exports = async function (context, req) {
         // Initialize the OpenAI client
         const client = new OpenAIClient(endpoint, new AzureKeyCredential(apiKey));
         
-        // Extract system message from your ChatSetup.json
+        // System message for the AI agent
         const systemMessage = "You are the AXS Passport AI Agent, designed to help with workplace adjustments. You assist users in creating and managing adjustment records for employees with disabilities or health conditions.";
         
         // Log the conversation for debugging
         context.log(`User message: ${userMessage}`);
         
-        // Call your AI Foundry agent
+        // Call your AI Foundry agent with simplified parameters
         context.log('Sending request to OpenAI API...');
         const response = await client.getChatCompletions(
             deploymentName,
@@ -46,8 +47,8 @@ module.exports = async function (context, req) {
                 { role: "user", content: userMessage }
             ],
             { 
-                temperature: 0.7, 
-                maxTokens: 800
+                temperature: 0.7
+                // Removed maxTokens parameter which might be causing issues
             }
         );
         
